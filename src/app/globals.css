@@ -547,40 +547,131 @@ footer{padding:34px 52px;background:var(--footer-bg);border-top:1px solid var(--
   z-index: 1;
 }
 
-/* Custom DivIcon Pulse Animation */
+/* ─── PREMIUM LOCATION PIN 📍 ICONS ─── */
 .custom-map-icon {
+  background: transparent !important;
+  border: none !important;
   display: flex !important;
   align-items: center;
   justify-content: center;
+  overflow: visible !important;
 }
 
-.map-pulse-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #D4A853;
-  box-shadow: 0 0 0 rgba(212, 168, 83, 0.4);
-  transition: all 0.3s;
+.pin-marker-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  cursor: pointer;
+  animation: pin-drop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  transform-origin: 17px 43px;
+  user-select: none;
 }
 
-.map-pulse-dot.active {
-  width: 14px;
-  height: 14px;
-  background: #E87C5A;
-  box-shadow: 0 0 12px #E87C5A;
-  animation: pulse-ring 1.5s infinite;
-}
-
-@keyframes pulse-ring {
+@keyframes pin-drop {
   0% {
+    transform: translateY(-38px) scale(0.3);
+    opacity: 0;
+  }
+  65% {
+    transform: translateY(3px) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.pin-marker-svg {
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.35));
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.25s ease;
+  overflow: visible;
+  display: block;
+}
+
+.pin-marker-wrapper:hover .pin-marker-svg {
+  transform: scale(1.15) translateY(-3px);
+  filter: drop-shadow(0 10px 18px rgba(232, 124, 90, 0.45));
+}
+
+.pin-marker-wrapper.is-active .pin-marker-svg {
+  transform: scale(1.12);
+  filter: drop-shadow(0 8px 16px rgba(232, 124, 90, 0.5));
+}
+
+/* Pulsing radar ground ripple */
+.pin-marker-pulse {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(232, 124, 90, 0.4);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.pin-marker-wrapper.is-active .pin-marker-pulse {
+  animation: pin-radar 2s infinite ease-out;
+}
+
+.pin-marker-wrapper.is-resting .pin-marker-pulse {
+  background: rgba(99, 102, 241, 0.45);
+}
+
+.pin-marker-wrapper.is-resting.is-active .pin-marker-pulse {
+  animation: pin-radar-resting 2s infinite ease-out;
+}
+
+@keyframes pin-radar {
+  0% {
+    width: 10px;
+    height: 4px;
+    opacity: 0.9;
     box-shadow: 0 0 0 0 rgba(232, 124, 90, 0.7);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(232, 124, 90, 0);
+    width: 44px;
+    height: 16px;
+    opacity: 0;
+    box-shadow: 0 0 0 16px rgba(232, 124, 90, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(232, 124, 90, 0);
+    width: 50px;
+    height: 18px;
+    opacity: 0;
   }
+}
+
+@keyframes pin-radar-resting {
+  0% {
+    width: 10px;
+    height: 4px;
+    opacity: 0.9;
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7);
+  }
+  70% {
+    width: 44px;
+    height: 16px;
+    opacity: 0;
+    box-shadow: 0 0 0 16px rgba(99, 102, 241, 0);
+  }
+  100% {
+    width: 50px;
+    height: 18px;
+    opacity: 0;
+  }
+}
+
+.pin-popup-wrapper {
+  font-family: 'DM Sans', sans-serif;
+  padding: 4px 6px;
+  min-width: 160px;
+  max-width: 240px;
 }
 
 /* Leaflet control overlays design adjustments */

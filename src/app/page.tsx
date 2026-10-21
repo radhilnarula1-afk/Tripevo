@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import DateRangePicker from '@/frontend/components/DateRangePicker';
 import { VibeCheck } from '@/frontend/components/preferences/VibeCheck';
 import { createClient } from '@/backend/db/supabase/client';
@@ -131,6 +131,68 @@ export default function TripEvoApp() {
   const [activePreferences, setActivePreferences] = useState<any>(null);
   const [reschedulingDays, setReschedulingDays] = useState<Record<number, boolean>>({});
   const [rescheduledDays, setRescheduledDays] = useState<Record<number, boolean>>({});
+  const [mapZooming, setMapZooming] = useState(false);
+  const [restingDays, setRestingDays] = useState<Record<number, boolean>>({});
+  const markersLayerRef = useRef<any>(null);
+
+  // Check if a day is marked as resting or leisure
+  const isDayResting = (dayIdx: number) => {
+    if (restingDays[dayIdx]) return true;
+    const day = itinerary?.days?.[dayIdx];
+    if (!day) return false;
+    const text = `${day.title || ''} ${day.desc || ''}`.toLowerCase();
+    return text.includes('rest day') || text.includes('relax day') || text.includes('leisure day') || 
+           text.includes('relaxation') || text.includes('free day') || text.includes('chill day');
+  };
+
+  const toggleRestingDay = (dayIdx: number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const willBeResting = !isDayResting(dayIdx);
+    setRestingDays(prev => ({
+      ...prev,
+      [dayIdx]: willBeResting
+    }));
+    triggerCustomToast(willBeResting ? `Day ${dayIdx + 1} marked as Rest & Leisure day 🌴` : `Day ${dayIdx + 1} restored to active itinerary 📍`);
+  };
+
+  const handleMoveDay = (fromIdx: number, direction: 'up' | 'down', e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!itinerary) return;
+    const toIdx = direction === 'up' ? fromIdx - 1 : fromIdx + 1;
+    if (toIdx < 0 || toIdx >= itinerary.days.length) return;
+
+    const newDays = [...itinerary.days];
+    const temp = newDays[fromIdx];
+    newDays[fromIdx] = newDays[toIdx];
+    newDays[toIdx] = temp;
+
+    const renumberedDays = newDays.map((d, i) => ({ ...d, day: i + 1 }));
+
+    const updatedMapLocs = (itinerary.map_locations || []).map((loc: any) => {
+      let locDay = typeof loc.day === 'number' ? loc.day : parseInt(String(loc.day).match(/\d+/)?.[0] || '1', 10);
+      if (locDay === fromIdx + 1) return { ...loc, day: toIdx + 1 };
+      if (locDay === toIdx + 1) return { ...loc, day: fromIdx + 1 };
+      return loc;
+    });
+
+    setRestingDays(prev => {
+      const copy = { ...prev };
+      const fromVal = copy[fromIdx];
+      const toVal = copy[toIdx];
+      if (fromVal !== undefined) copy[toIdx] = fromVal; else delete copy[toIdx];
+      if (toVal !== undefined) copy[fromIdx] = toVal; else delete copy[fromIdx];
+      return copy;
+    });
+
+    setItinerary({
+      ...itinerary,
+      days: renumberedDays,
+      map_locations: updatedMapLocs
+    });
+
+    handleDaySelect(toIdx);
+    triggerCustomToast(`Moved Day ${fromIdx + 1} to Day ${toIdx + 1} 📍`);
+  };
 
   const handleRescheduleDayForIndoor = async (dayIdx: number) => {
     if (!itinerary) return;
@@ -186,6 +248,9 @@ export default function TripEvoApp() {
         });
 
         setRescheduledDays(prev => ({ ...prev, [dayIdx]: true }));
+        // Trigger map zoom pulse to show locations updated
+        setMapZooming(true);
+        setTimeout(() => setMapZooming(false), 700);
         triggerCustomToast(`Day ${dayIdx + 1} rescheduled for indoor activities!`);
       } else {
         throw new Error('No day data returned');
@@ -620,7 +685,7 @@ export default function TripEvoApp() {
     }
   }, [mapLoaded, itinerary]);
 
-  // Update map markers and fly-to view dynamically based on active day/activity
+  // Update map markers and fly-to view dynamically based on active day/activity/resting
   useEffect(() => {
     if (!mapInstance || !itinerary) return;
     const L = (window as any).L;
@@ -632,24 +697,41 @@ export default function TripEvoApp() {
     }, 100);
 
     const center = getDestinationCenter();
-    const currentMarkers: any[] = [];
 
-    const customIcon = L.divIcon({
+    // Ensure dedicated markers layer group exists on the map
+    if (!markersLayerRef.current) {
+      markersLayerRef.current = L.layerGroup().addTo(mapInstance);
+    }
+    markersLayerRef.current.clearLayers();
+
+    // Build authentic SVG location pin 📍 icon
+    const makePinIcon = (isActive: boolean, stopNum: number | string, isResting: boolean) => L.divIcon({
       className: 'custom-map-icon',
-      html: `<div class="map-pulse-dot"></div>`,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
+      html: `
+        <div class="pin-marker-wrapper ${isActive ? 'is-active' : ''} ${isResting ? 'is-resting' : ''}">
+          <div class="pin-marker-pulse"></div>
+          <svg class="pin-marker-svg" width="34" height="44" viewBox="0 0 34 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M17 1C8.163 1 1 8.163 1 17C1 28.5 15.3 41.6 16.35 42.55C16.73 42.9 17.27 42.9 17.65 42.55C18.7 41.6 33 28.5 33 17C33 8.163 25.837 1 17 1Z" 
+                  fill="${isActive ? '#E87C5A' : (isResting ? '#6366F1' : '#D4A853')}" 
+                  stroke="#FFFFFF" 
+                  stroke-width="2" 
+            />
+            <circle cx="17" cy="17" r="7.5" fill="#FFFFFF" />
+            <text x="17" y="20.5" text-anchor="middle" font-size="${isResting ? '9' : '10.5'}" font-weight="800" font-family="'DM Sans', -apple-system, sans-serif" fill="${isActive ? '#E87C5A' : (isResting ? '#6366F1' : '#B8862E')}">
+              ${isResting ? '🌴' : stopNum}
+            </text>
+          </svg>
+        </div>`,
+      iconSize: [34, 44],
+      iconAnchor: [17, 43],
+      popupAnchor: [0, -45]
     });
 
-    const activeIcon = L.divIcon({
-      className: 'custom-map-icon active',
-      html: `<div class="map-pulse-dot active"></div>`,
-      iconSize: [26, 26],
-      iconAnchor: [13, 13]
-    });
+    const isCurrentDayResting = isDayResting(activeDayIdx);
+    const dayLocations: any[] = [];
 
     // Safely parse day numbers whether the model returned numbers ("1") or strings ("Day 1")
-    const dayLocations = (itinerary.map_locations || []).filter((loc: any, idx: number) => {
+    const matchedLocs = (itinerary.map_locations || []).filter((loc: any, idx: number) => {
       let dayNum: number | null = null;
       if (typeof loc.day === 'number') {
         dayNum = loc.day;
@@ -658,91 +740,147 @@ export default function TripEvoApp() {
         if (match) dayNum = parseInt(match[0], 10);
       }
       if (dayNum !== null) {
-        return dayNum === activeDayIdx + 1;
+        return dayNum === activeDayIdx + 1 || (loc.day === activeDayIdx && !itinerary.map_locations.some((x: any) => x.day === 1));
       }
       return idx === activeDayIdx;
     });
 
-    if (dayLocations.length > 0) {
-      const latLngs: [number, number][] = [];
-
-      dayLocations.forEach((loc: any, idx: number) => {
-        const lat = (typeof loc.lat === 'number' && loc.lat !== 0) ? loc.lat : (center.lat + (idx * 0.012 - 0.006));
-        const lng = (typeof loc.lng === 'number' && loc.lng !== 0) ? loc.lng : (center.lng + (idx * 0.012 - 0.006));
-        latLngs.push([lat, lng]);
-
-        // Determine if this marker should be active/focused
-        let isFocused = false;
-        if (activeActivityName) {
-          const actNorm = activeActivityName.toLowerCase();
-          const nameNorm = String(loc.name || '').toLowerCase();
-          isFocused = nameNorm.includes(actNorm) || actNorm.includes(nameNorm) ||
-                      nameNorm.split(' ').some(w => w.length > 3 && actNorm.includes(w));
-          // If no direct name substring match, match by activity index
-          if (!isFocused && itinerary.days[activeDayIdx]?.activities) {
-            const actIdx = itinerary.days[activeDayIdx].activities.indexOf(activeActivityName);
-            if (actIdx !== -1 && actIdx === idx) {
-              isFocused = true;
-            }
-          }
-        } else {
-          isFocused = idx === 0;
-        }
-
-        const marker = L.marker([lat, lng], { 
-          icon: isFocused ? activeIcon : customIcon,
-          zIndexOffset: isFocused ? 1000 : 100 
-        }).bindPopup(
-          `<div style="font-family:sans-serif;padding:3px 4px;min-width:140px;">
-             <strong style="color:#0E0B1F;font-size:13px;display:block;margin-bottom:2px;">${loc.name}</strong>
-             <span style="color:#E87C5A;font-weight:600;font-size:11px;">Day ${activeDayIdx + 1} • Stop ${idx + 1}</span>
-           </div>`,
-          { closeButton: false, offset: [0, -6] }
-        );
-
-        marker.addTo(mapInstance);
-        currentMarkers.push(marker);
-
-        if (isFocused) {
-          marker.openPopup();
-          mapInstance.flyTo([lat, lng], 14, {
-            animate: true,
-            duration: 0.8,
-            easeLinearity: 0.3
-          });
-        }
-
-        marker.on('click', () => {
-          setActiveActivityName(loc.name);
+    if (matchedLocs.length > 0) {
+      matchedLocs.forEach((l: any, i: number) => {
+        dayLocations.push({
+          name: l.name || `Stop ${i + 1}`,
+          lat: (typeof l.lat === 'number' && l.lat !== 0) ? l.lat : (center.lat + (i * 0.012 - 0.006)),
+          lng: (typeof l.lng === 'number' && l.lng !== 0) ? l.lng : (center.lng + (i * 0.012 - 0.006)),
+          isResting: isCurrentDayResting,
+          stopNum: i + 1,
+          desc: l.desc || ''
         });
       });
-
-      // If user switched days without picking an activity, zoom to fit all of the day's stops together
-      if (!activeActivityName && latLngs.length > 1) {
-        try {
-          const bounds = L.latLngBounds(latLngs);
-          mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 14, animate: true });
-        } catch (_) {}
-      }
     } else {
-      // Fallback if no specific locations generated for this day: fly smoothly to city center
-      mapInstance.flyTo([center.lat, center.lng], 12, {
-        animate: true,
-        duration: 0.8,
-        easeLinearity: 0.3
-      });
+      // Day has no specific locations in map_locations (e.g. resting day or AI omitted coordinates)
+      const dayData = itinerary.days[activeDayIdx];
+      const hasActivities = dayData?.activities && dayData.activities.length > 0;
+
+      if (isCurrentDayResting || !hasActivities) {
+        // Always place a dedicated Resting / Leisure pin!
+        dayLocations.push({
+          name: dayData?.title || `Day ${activeDayIdx + 1}: Rest & Leisure`,
+          lat: center.lat,
+          lng: center.lng,
+          isResting: true,
+          stopNum: 1,
+          desc: dayData?.desc || 'Relaxing leisure time, hotel spa, or local cafes'
+        });
+      } else {
+        // Derive pins from the day's scheduled activities
+        dayData.activities.forEach((act: string, idx: number) => {
+          const angle = (idx * (2 * Math.PI / Math.max(1, dayData.activities.length))) + (activeDayIdx * 0.8);
+          const radius = 0.012 + (idx * 0.004);
+          dayLocations.push({
+            name: act,
+            lat: center.lat + Math.sin(angle) * radius,
+            lng: center.lng + Math.cos(angle) * radius,
+            isResting: false,
+            stopNum: idx + 1,
+            desc: `Day ${activeDayIdx + 1} Activity`
+          });
+        });
+      }
     }
 
-    // Clean-up function to remove active markers when dependencies change or component unmounts
-    return () => {
-      currentMarkers.forEach(m => {
-        try { mapInstance.removeLayer(m); } catch (_) {}
+    const latLngs: [number, number][] = [];
+
+    dayLocations.forEach((loc: any, idx: number) => {
+      const lat = loc.lat;
+      const lng = loc.lng;
+      latLngs.push([lat, lng]);
+
+      // Determine if this marker should be active/focused
+      let isFocused = false;
+      if (activeActivityName) {
+        const actNorm = activeActivityName.toLowerCase();
+        const nameNorm = String(loc.name || '').toLowerCase();
+        isFocused = nameNorm.includes(actNorm) || actNorm.includes(nameNorm) ||
+                    nameNorm.split(' ').some(w => w.length > 3 && actNorm.includes(w));
+        if (!isFocused && itinerary.days[activeDayIdx]?.activities) {
+          const actIdx = itinerary.days[activeDayIdx].activities.indexOf(activeActivityName);
+          if (actIdx !== -1 && actIdx === idx) isFocused = true;
+        }
+      } else {
+        isFocused = idx === 0;
+      }
+
+      const badgeText = loc.isResting ? '🌴 Rest & Leisure' : ('📍 Day ' + (activeDayIdx + 1) + ' · Stop ' + loc.stopNum);
+      const descHtml = loc.desc ? ('<div style="font-size:11px;color:var(--text-secondary);line-height:1.4;">' + loc.desc + '</div>') : '';
+      const popupContent = `
+        <div class="pin-popup-wrapper">
+          <div style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:${isFocused ? '#E87C5A' : (loc.isResting ? '#6366F1' : '#D4A853')};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">
+            ${badgeText}
+          </div>
+          <strong style="display:block;font-size:13px;color:var(--text-primary);line-height:1.25;margin-bottom:4px;">${loc.name}</strong>
+          ${descHtml}
+        </div>
+      `;
+
+      const marker = L.marker([lat, lng], {
+        icon: makePinIcon(isFocused, loc.stopNum, loc.isResting),
+        zIndexOffset: isFocused ? 1000 : 100
+      }).bindPopup(popupContent, { closeButton: false, offset: [0, -42] });
+
+      marker.addTo(markersLayerRef.current);
+
+      if (isFocused) {
+        marker.openPopup();
+        mapInstance.flyTo([lat, lng], 14, {
+          animate: true,
+          duration: 0.95,
+          easeLinearity: 0.25
+        });
+      }
+
+      marker.on('click', () => {
+        setActiveActivityName(loc.name);
       });
+    });
+
+    // If user switched days without picking a specific activity, smoothly zoom to fit the day's pins
+    if (!activeActivityName && latLngs.length > 0) {
+      try {
+        if (latLngs.length === 1) {
+          mapInstance.flyTo(latLngs[0], 14, {
+            animate: true,
+            duration: 1.0,
+            easeLinearity: 0.25
+          });
+        } else {
+          const bounds = L.latLngBounds(latLngs);
+          mapInstance.flyToBounds(bounds, {
+            paddingTopLeft: [60, 60],
+            paddingBottomRight: [60, 60],
+            maxZoom: 14,
+            animate: true,
+            duration: 1.05,
+            easeLinearity: 0.25
+          });
+        }
+      } catch (_) {}
+    }
+
+    return () => {
+      try {
+        markersLayerRef.current?.clearLayers();
+      } catch (_) {}
     };
-  }, [mapInstance, itinerary, activeDayIdx, activeActivityName]);
+  }, [mapInstance, itinerary, activeDayIdx, activeActivityName, restingDays]);
+
+
 
   // Unified day selection handler to update index and reset activity focus
   const handleDaySelect = (idx: number) => {
+    if (idx === activeDayIdx) return;
+    // Trigger map zoom animation
+    setMapZooming(true);
+    setTimeout(() => setMapZooming(false), 600);
     setActiveActivityName(null);
     setActiveDayIdx(idx);
   };
@@ -1731,7 +1869,19 @@ export default function TripEvoApp() {
 
             {/* Interactive Real Leaflet Map (Full Width Banner) */}
             <div className="w-full mb-8 relative z-10 no-print">
-              <div className="itin-map w-full h-[280px] md:h-[450px] aspect-auto" style={{ position: 'relative', overflow: 'hidden', borderRadius: '22px' }}>
+              <div
+                className="itin-map w-full h-[280px] md:h-[450px] aspect-auto"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  borderRadius: '22px',
+                  transition: 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.5s ease',
+                  transform: mapZooming ? 'scale(1.012)' : 'scale(1)',
+                  boxShadow: mapZooming
+                    ? '0 0 0 2px rgba(232,124,90,0.5), 0 20px 60px rgba(232,124,90,0.15)'
+                    : '0 8px 32px rgba(0,0,0,0.25)'
+                }}
+              >
                 <div id="real-map" style={{ width: '100%', height: '100%', borderRadius: '22px' }} />
                 
                 {/* Map overlay card - updates on every day click */}
@@ -1752,14 +1902,29 @@ export default function TripEvoApp() {
                   </div>
                   <div className="p-3">
                     <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1 tracking-wider">Location</div>
-                    <div className="text-sm font-bold text-[var(--text-primary)] mb-2 leading-tight">
-                      {itinerary.map_locations?.find((l: any) => l.day === activeDayIdx + 1)?.name || itinerary.days[activeDayIdx]?.title}
+                    <div className="text-sm font-bold text-[var(--text-primary)] mb-2 leading-tight flex items-center gap-1.5">
+                      {isDayResting(activeDayIdx) ? (
+                        <>
+                          <span className="text-xs">🌴</span>
+                          <span>{itinerary.days[activeDayIdx]?.title || 'Rest & Leisure Day'}</span>
+                        </>
+                      ) : (
+                        <span>{itinerary.map_locations?.find((l: any) => l.day === activeDayIdx + 1)?.name || itinerary.days[activeDayIdx]?.title}</span>
+                      )}
                     </div>
-                    <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1 tracking-wider">Morning</div>
+                    <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1 tracking-wider">
+                      {isDayResting(activeDayIdx) ? 'Experience' : 'Morning'}
+                    </div>
                     <div className="flex gap-3 items-start">
                       <div className="flex-1">
-                        <div className="text-xs font-semibold text-[var(--text-primary)] leading-snug line-clamp-2">{itinerary.days[activeDayIdx]?.activities[0] || 'Explore the area'}</div>
-                        <div className="text-[10px] text-[var(--text-muted)] font-medium mt-0.5">9:00 AM • {itinerary.days[activeDayIdx]?.weather_emoji} {weather?.forecast[activeDayIdx]?.condition || 'Clear'}</div>
+                        <div className="text-xs font-semibold text-[var(--text-primary)] leading-snug line-clamp-2">
+                          {isDayResting(activeDayIdx)
+                            ? (itinerary.days[activeDayIdx]?.desc || 'Recharge, spa, local dining or beach lounge')
+                            : (itinerary.days[activeDayIdx]?.activities[0] || 'Explore the area')}
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)] font-medium mt-0.5">
+                          {isDayResting(activeDayIdx) ? 'All Day Leisure' : '9:00 AM'} • {itinerary.days[activeDayIdx]?.weather_emoji} {weather?.forecast[activeDayIdx]?.condition || 'Clear'}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1839,7 +2004,32 @@ export default function TripEvoApp() {
                         className={`itin-day ${isActive ? 'active' : ''}`}
                         onClick={() => handleDaySelect(idx)}
                       >
-                        <div className="day-num">{day.day}</div>
+                        <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                          <div className={`day-num ${isDayResting(idx) ? '!bg-indigo-600 !border-indigo-400 !text-white' : ''}`}>
+                            {isDayResting(idx) ? '🌴' : day.day}
+                          </div>
+                          {/* Day reorder arrows */}
+                          <div className="flex flex-col gap-0.5 no-print" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={(e) => handleMoveDay(idx, 'up', e)}
+                              disabled={idx === 0}
+                              title="Move day earlier"
+                              className="w-5 h-4 flex items-center justify-center bg-[var(--bg-glass)] hover:bg-[var(--border-hover)] border border-[var(--border)] rounded text-[9px] text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-all"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleMoveDay(idx, 'down', e)}
+                              disabled={idx === itinerary.days.length - 1}
+                              title="Move day later"
+                              className="w-5 h-4 flex items-center justify-center bg-[var(--bg-glass)] hover:bg-[var(--border-hover)] border border-[var(--border)] rounded text-[9px] text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-all"
+                            >
+                              ▼
+                            </button>
+                          </div>
+                        </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           {/* Weather badge relocated to top of day card */}
                           <div className="day-weather mb-1.5 opacity-100 flex items-center gap-1.5 font-bold text-xs" style={{ opacity: 1 }}>
